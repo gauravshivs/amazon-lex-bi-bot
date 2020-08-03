@@ -44,7 +44,7 @@ def hello_intent_handler(intent_request, session_attributes):
     askCount = helpers.increment_counter(session_attributes, 'greetingCount')
     
     # build response string
-    if askCount == 1: response_string = "Hello! How can I help?"
+    if askCount == 1: response_string = "Hello! I am health Plus How can I help?"
     elif askCount == 2: response_string = "I'm here"
     elif askCount == 3: response_string = "I'm listening"
     elif askCount == 4: response_string = "Yes?"
