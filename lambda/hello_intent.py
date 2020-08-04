@@ -51,5 +51,12 @@ def hello_intent_handler(intent_request, session_attributes):
     elif askCount == 5: response_string = "Really?"
     else: response_string = 'Ok'
 
-    return helpers.close(session_attributes, 'Fulfilled', {'contentType': 'PlainText','content': response_string})   
-
+    #return helpers.close(session_attributes, 'Fulfilled', {'contentType': 'PlainText','content': response_string})
+    return helpers.close(session_attributes, 'Fulfilled', {
+                                                            'contentType': "application/vnd.amazonaws.card.generic",
+                                                            'genericAttachments': [
+                                                            {
+                                                                'imageUrl':"https://ibb.co/4wqR5cs",
+                                                            }
+                                                            ]
+                                                          }
