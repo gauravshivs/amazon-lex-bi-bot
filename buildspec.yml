@@ -4,7 +4,6 @@ phases:
   install:
     commands:
       - echo "Nothing to install."
-      - pip install tensorflow
   build:
     commands:
       - echo Build started on `date`
