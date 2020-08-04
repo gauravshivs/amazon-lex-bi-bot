@@ -1,0 +1,425 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  This template uses AWS CodeBuild and AWS CodePipeline to
+  achieve continuous deployment of the bibot code
+  from a GitHub repository.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: amazon-lex-bi-bot
+    Description: The repo name of the sample service
+    MinLength: 1
+
+  GitHubRepoOwner:
+    Type: String
+    Description: GitHub username of repo owner
+    MinLength: 1
+
+  GitHubToken:
+    Type: String
+    Description: >
+      GitHub OAuth Token with access to the repo (https://github.com/settings/tokens)
+    MinLength: 1
+
+  BotName:
+    Description: 'Lex bot name'
+    Default: 'BIBot'
+    Type: 'String'
+
+  Intents:
+    Description: 'List of Lex intent names for the bot'
+    Default: 'Compare_Intent Count_Intent Goodbye_Intent Hello_Intent Refresh_Intent Reset_Intent Switch_Intent Top_Intent'
+    Type: 'String'
+
+  Slots:
+    Description: 'List of Lex slot types for the bot'
+    Default: 'cat_desc dimensions event_name'
+    Type: 'String'
+
+  LambdaFunctionName:
+    Description: 'Lambda fulfillment function name prefix'
+    Default: 'BIBot'
+    Type: 'String'
+
+  AthenaDB:
+    Description: 'Athena database name'
+    Default: 'tickit'
+    Type: 'String'
+
+  AthenaDBDescription:
+    Description: 'Athena database description'
+    Default: 'Test TICKIT database for Lex business intelligence bot (BIBot)'
+    Type: 'String'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterLabels:
+      GitHubRepo:
+        default: "Repo"
+      GitHubRepoOwner:
+        default: "Owner"
+      GitHubToken:
+        default: "Personal Access Token"
+      BotName:
+        default: "Lex Bot"
+      Intents:
+        default: "Intents"
+      Slots:
+        default: "Slot Types"
+      LambdaFunctionName:
+        default: "Lambda Function"
+      AthenaDB:
+        default: "Database Name"
+      AthenaDBDescription:
+        default: "Description"
+    ParameterGroups:
+      - Label:
+          default: GitHub Configuration
+        Parameters:
+          - GitHubRepo
+          - GitHubRepoOwner
+          - GitHubToken
+      - Label:
+          default: Lex Bot
+        Parameters:
+          - BotName
+          - Intents
+          - Slots
+          - LambdaFunctionName
+      - Label:
+          default: Athena Database
+        Parameters:
+          - AthenaDB
+          - AthenaDBDescription
+
+Resources:
+  # Artifact Bucket used by CodePipeline and CodBuild
+  ArtifactStore:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  # Athena S3 bucket - where the data will reside
+  AthenaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  # Athena output S3 bucket
+  AthenaOutputLocation:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:  "sts:AssumeRole"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+      Policies:
+        - PolicyName: s3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action:
+                - s3:*
+              Resource:
+                - !Sub "arn:aws:s3:::${AthenaBucket}"
+                - !Sub "arn:aws:s3:::${AthenaBucket}/*"
+                - !Sub "arn:aws:s3:::${AthenaOutputLocation}"
+                - !Sub "arn:aws:s3:::${AthenaOutputLocation}/*"
+        - PolicyName: queryAthena
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action:
+                - athena:GetTable
+                - athena:GetTables
+                - athena:GetCatalogs
+                - athena:GetQueryExecution
+                - athena:GetQueryExecutions
+                - athena:GetQueryResults
+                - athena:GetQueryResultsStream
+                - athena:RunQuery
+                - athena:StartQueryExecution
+                - athena:StopQueryExecution
+                - athena:CancelQueryExecution
+                - glue:GetDatabase
+                - glue:GetDatabases
+                - glue:GetTable
+                - glue:GetTables
+                - glue:GetPartition
+                - glue:GetPartitions
+                - glue:BatchGetPartition
+                - s3:GetBucketLocation
+                - s3:ListAllMyBuckets
+                - s3:ListBucket
+              Resource: "*"
+        - PolicyName: lexBotUpdate
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action:
+                - lex:GetBot
+                - lex:PutBot
+                - lex:GetBotAlias
+                - lex:PutBotAlias
+                - lex:GetIntent
+                - lex:PutIntent
+                - lex:GetSlotType
+                - lex:PutSlotType
+              Resource:
+                - !Sub "arn:aws:lex:${AWS::Region}:${AWS::AccountId}:intent:*:*"
+                - !Sub "arn:aws:lex:${AWS::Region}:${AWS::AccountId}:slottype:*:*"
+                - !Sub "arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot:${BotName}:*"
+        - PolicyName: createLogGroup
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+              Resource:
+                - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+        - PolicyName: writeCloudWatchLogs
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource:
+                - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${BotName}*:*"
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /service-role/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Principal:
+              Service:
+                - "codebuild.amazonaws.com"
+            Effect: "Allow"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-build:*
+              - Effect: "Allow"
+                Action:
+                  - "ssm:GetParameters"
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ACCESS_KEY_ID
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SECRET_ACCESS_KEY
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:CopyObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactStore}"
+                  - !Sub "arn:aws:s3:::${ArtifactStore}/*"
+                  - !Sub "arn:aws:s3:::${AthenaBucket}"
+                  - !Sub "arn:aws:s3:::${AthenaBucket}/*"
+                  - !Sub "arn:aws:s3:::${AthenaOutputLocation}"
+                  - !Sub "arn:aws:s3:::${AthenaOutputLocation}/*"
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Principal:
+             Service:
+               - codepipeline.amazonaws.com
+            Effect: Allow
+            Action:
+                - sts:AssumeRole
+      Policies:
+        - PolicyName: S3ReadWrite
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:Get*
+                  - s3:Head*
+                  - s3:List*
+                  - s3:CreateMultipartUpload
+                  - s3:CompleteMultipartUpload
+                  - s3:AbortMultipartUpload
+                  - s3:CopyObject
+                  - s3:PutObject*
+                  - s3:DeleteObject*
+                  - s3:Upload*
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactStore}"
+                  - !Sub "arn:aws:s3:::${ArtifactStore}/*"
+                  - !Sub "arn:aws:s3:::${AthenaBucket}"
+                  - !Sub "arn:aws:s3:::${AthenaBucket}/*"
+                  - !Sub "arn:aws:s3:::${AthenaOutputLocation}"
+                  - !Sub "arn:aws:s3:::${AthenaOutputLocation}/*"
+        - PolicyName: CodeBuildStart
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource:
+                  - !GetAtt CodeBuildProject.Arn
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${AWS::StackName}-build
+      Description: "CodeBuild project to create the Athena database and build the Lex bot"
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 10
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: "buildspec.yml"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/python:3.8.5
+        EnvironmentVariables:
+          - Name: "AWS_ACCESS_KEY_ID"
+            Type: "PARAMETER_STORE"
+            Value: "ACCESS_KEY_ID"
+          - Name: "AWS_SECRET_ACCESS_KEY"
+            Type: "PARAMETER_STORE"
+            Value: "SECRET_ACCESS_KEY"
+          - Name: "BOT"
+            Type: "PLAINTEXT"
+            Value: !Sub "${BotName}"
+          - Name: "INTENTS"
+            Type: "PLAINTEXT"
+            Value: !Sub "${Intents}"
+          - Name: "SLOTS"
+            Type: "PLAINTEXT"
+            Value: !Sub "${Slots}"
+          - Name: "LAMBDA"
+            Type: "PLAINTEXT"
+            Value: !Sub "${LambdaFunctionName}"
+          - Name: "LAMBDA_ROLE_ARN"
+            Type: "PLAINTEXT"
+            Value: !GetAtt LambdaExecutionRole.Arn
+          - Name: "ATHENA_DB"
+            Type: "PLAINTEXT"
+            Value: !Sub "${AthenaDB}"
+          - Name: "ATHENA_DB_DESCRIPTION"
+            Type: "PLAINTEXT"
+            Value: !Sub "${AthenaDBDescription}"
+          - Name: "ATHENA_BUCKET"
+            Type: "PLAINTEXT"
+            Value: !Join ['', ['s3://', !Ref AthenaBucket]]
+          - Name: "ATHENA_BUCKET_REGION"
+            Type: "PLAINTEXT"
+            Value: !Ref 'AWS::Region'
+          - Name: "ATHENA_OUTPUT_LOCATION"
+            Type: "PLAINTEXT"
+            Value: !Join ['', ['s3://', !Ref AthenaOutputLocation]]
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${AWS::StackName}-pipeline
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactStore
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: !Sub ${AWS::StackName}-bot
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                Owner: !Ref GitHubRepoOwner
+                Repo: !Ref GitHubRepo
+                Branch: master
+                OAuthToken: !Ref GitHubToken
+              OutputArtifacts:
+                - Name: !Sub ${AWS::StackName}-source
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: !Sub ${AWS::StackName}-bot
+              InputArtifacts:
+                - Name: !Sub ${AWS::StackName}-source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              RunOrder: 1
+
+Outputs:
+    EventDataCopyCommand:
+        Description: Copy the Redshift Spectrum sample EVENT data to your Athena bucket
+        Value: !Sub "aws s3 cp s3://awssampledbuswest2/tickit/allevents_pipe.txt s3://${AthenaBucket}/event/allevents_pipe.txt --source-region us-west-2"
+    CategoryDataCopyCommand:
+        Description: Copy the Redshift Spectrum sample CATEGORY data to your Athena bucket
+        Value: !Sub "aws s3 cp s3://awssampledbuswest2/tickit/category_pipe.txt s3://${AthenaBucket}/category/category_pipe.txt --source-region us-west-2"
+    DateDataCopyCommand:
+        Description: Copy the Redshift Spectrum sample DATE data to your Athena bucket
+        Value: !Sub "aws s3 cp s3://awssampledbuswest2/tickit/date2008_pipe.txt s3://${AthenaBucket}/date/date2008_pipe.txt --source-region us-west-2"
+    ListingDataCopyCommand:
+        Description: Copy the Redshift Spectrum sample LISTING data to your Athena bucket
+        Value: !Sub "aws s3 cp s3://awssampledbuswest2/tickit/listings_pipe.txt s3://${AthenaBucket}/listing/listings_pipe.txt --source-region us-west-2"
+    SalesDataCopyCommand:
+        Description: Copy the Redshift Spectrum sample SALES data to your Athena bucket
+        Value: !Sub "aws s3 cp s3://awssampledbuswest2/tickit/sales_tab.txt s3://${AthenaBucket}/sales/sales_tab.txt --source-region us-west-2"
+    VenueDataCopyCommand:
+        Description: Copy the Redshift Spectrum sample VENUE data to your Athena bucket
+        Value: !Sub "aws s3 cp s3://awssampledbuswest2/tickit/venue_pipe.txt s3://${AthenaBucket}/venue/venue_pipe.txt --source-region us-west-2"
+    UserDataCopyCommand:
+        Description: Copy the Redshift Spectrum sample USERS data to your Athena bucket
+        Value: !Sub "aws s3 cp s3://awssampledbuswest2/tickit/allusers_pipe.txt s3://${AthenaBucket}/users/allusers_pipe.txt --source-region us-west-2"
+
+
