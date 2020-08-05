@@ -1,12 +1,12 @@
 #
 # Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this
 # software and associated documentation files (the "Software"), to deal in the Software
 # without restriction, including without limitation the rights to use, copy, modify,
 # merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
 # permit persons to whom the Software is furnished to do so.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
 # PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
@@ -14,10 +14,10 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
-
 import logging
 import json
 import bibot_helpers as helpers
+import matplotlib as plt
 
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
@@ -42,21 +42,46 @@ def hello_intent_handler(intent_request, session_attributes):
     # don't alter session_attributes['lastIntent'], let BIBot remember the last used intent
 
     askCount = helpers.increment_counter(session_attributes, 'greetingCount')
-    
-    # build response string
-    if askCount == 1: response_string = "Hello! I am health Plus How can I help?"
-    elif askCount == 2: response_string = "I'm here"
-    elif askCount == 3: response_string = "I'm listening"
-    elif askCount == 4: response_string = "Yes?"
-    elif askCount == 5: response_string = "Really?"
-    else: response_string = 'Ok'
+    ##Gaurav: I am playing here##
 
-    #return helpers.close(session_attributes, 'Fulfilled', {'contentType': 'PlainText','content': response_string})
-    return helpers.close(session_attributes, 'Fulfilled', {
-                                                            'contentType': "application/vnd.amazonaws.card.generic",
-                                                            'genericAttachments': [
-                                                            {
-                                                                'imageUrl':"https://ibb.co/4wqR5cs",
-                                                            }
-                                                            ]
-                                                          }
+    ##Gaurav: I am playing here##
+    # build response string
+    if askCount == 1:
+        response_string = "Hello! I am health app !How can I help?"
+    elif askCount == 2:
+        response_string = "I'm here"
+    elif askCount == 3:
+        response_string = "I'm listening"
+    elif askCount == 4:
+        response_string = "Yes?"
+    elif askCount == 5:
+        response_string = "Really?"
+    else:
+        response_string = 'Ok'
+    logger.debug('Starting2')
+    reponseg = {'sessionAttributes': session_attributes,
+                'dialogAction': {'type': 'Close', 'fulfillmentState': 'Fulfilled',
+                                 'message': {'contentType': 'PlainText', 'content': "I'm here"}}}
+    logger.debug(reponseg)
+    logger.debug('Gaurav is here enjoy')
+    logger.debug(
+        helpers.close(session_attributes, 'Fulfilled', {'contentType': 'PlainText', 'content': response_string}))
+    logger.debug('OutPut')
+    # return helpers.close(session_attributes, 'Fulfilled', {'contentType': 'PlainText','content': response_string})
+    # return reponseg
+    responseg2 = {
+        'sessionAttributes': session_attributes,
+        'dialogAction': {'type': 'Close', 'fulfillmentState': 'Fulfilled',
+                         'message': {'contentType': 'PlainText', 'content': 'Here is a image'},
+                         'responseCard': {
+                             'version': '2',
+                             'contentType': 'application/vnd.amazonaws.card.generic',
+                             'genericAttachments': [
+                                 {
+                                     'imageUrl': 'https://a0.awsstatic.com/main/images/logos/aws_logo_smile_1200x630.png',
+                                 }
+                             ]
+                         }
+                         }
+    }
+    return responseg2
